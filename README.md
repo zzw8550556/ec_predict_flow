@@ -91,15 +91,4 @@ npm run dev
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
-## 开发说明
-
-### 后端开发
-- 所有Celery任务定义在 `backend/app/tasks/` 目录
-- API端点定义在 `backend/app/api/endpoints/` 目录
-- 数据模式定义在 `backend/app/schemas/` 目录
-
-### 前端开发
-- 页面组件在 `frontend/src/views/` 目录
-- API调用封装在 `frontend/src/api/` 目录
-- 状态管理在 `frontend/src/stores/` 目录
 

@@ -1,5 +1,5 @@
 from calculate_indicator import calculate_atr,calculate_RSI,calculate_fast_cti,calculate_EWO,calculate_bollinger_bands,calculate_vwapb
-from calculate_indicator import calculate_IMIN,calculate_cti,calculate_KLEN,calculate_MAX,calculate_MA,calculate_QTLU
+from calculate_indicator import calculate_IMIN,calculate_KLEN,calculate_MAX,calculate_MA,calculate_QTLU
 from calculate_indicator import calculate_ROC,calculate_LOW,calculate_QTLD,calculate_RESI,calculate_SUMP
 
 import tqdm

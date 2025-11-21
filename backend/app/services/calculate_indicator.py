@@ -2,7 +2,6 @@ import pandas as pd
 import talib
 import talib.abstract as ta
 import numpy as np
-import pandas_ta as pta
 from numba import njit
 
 def calculate_smi(df, k_length=10, d_length=3):
@@ -254,8 +253,7 @@ def calculate_hma_50(df, window=50, min_periods=None):
     )
     return rolling_weighted_mean(ma, np.sqrt(window), min_periods)
 # ---------------------------------------------
-def calculate_cti (df,length=20):
-    return pta.cti(df['close'], length=length)
+
 
 def calculate_fast_cti(df,length=20):
     return fast_cti(df['close'], length=length)

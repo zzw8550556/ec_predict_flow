@@ -33,6 +33,17 @@ class LabelCalculationRequest(BaseModel):
     threshold: Optional[float] = None  # 过滤阈值，如果为None则使用默认值
 
 
+class LabelCalculationV2Request(BaseModel):
+    data_file: str  # 原始数据文件名
+    look_forward: int = 10  # 预测周期
+    label_type: str = 'up'  # 标签类型：'up'上涨或'down'下跌
+    filter_type: str = 'rsi'  # 过滤类型：'rsi'或'cti'
+    threshold: Optional[float] = None  # 过滤阈值，如果为None则使用默认值
+    methods: List[str] = ["safety_buffer"]  # 方法列表：可包含 'safety_buffer', 'average_price', 'multi_horizon'
+    buffer_multiplier: float = 0.5  # 安全垫倍数（用于safety_buffer）
+    avg_score_threshold: float = 0.0  # 平均分数阈值（用于average_price）
+
+
 class ModelTrainingRequest(BaseModel):
     features_file: str  # 特征文件名
     labels_file: str  # 标签文件名

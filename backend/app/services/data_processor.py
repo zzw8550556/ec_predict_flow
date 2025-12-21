@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 # 引入您可能需要的技术指标库, 例如 talib
 # import talib
+import math
 from tqdm import tqdm
 
 class DataProcessor:
@@ -563,6 +564,260 @@ class DataProcessor:
         self.df = df
         return self.df
     
+    def generate_features_potato(self):
+        """
+        根据特征工程方法生成特征因子。
+        包含价格特征、成交量特征、技术指标、统计特征等多个维度的特征。
+        """
+
+        df = self.df.copy()
+
+        # 配置参数
+        very_short_periods = [1, 2, 3, 5]
+        short_term_periods = [5, 8, 13, 21]
+        medium_term_periods = [21, 34, 55, 89]
+        ultra_short_periods = [1, 2, 3]
+        long_term_periods = [55, 89, 144, 233]
+
+        # ============ 价格特征 ============
+        # 1. 短期动量特征
+        for period in very_short_periods + short_term_periods:
+            if period <= len(df):
+                df[f'feature_momentum_{period}'] = df['close'] / df['close'].shift(period) - 1
+
+        # 2. 中期趋势特征
+        for period in medium_term_periods:
+            if period <= len(df):
+                df[f'feature_trend_{period}'] = (df['close'] - df['close'].shift(period)) / df['close'].shift(period)
+
+        # 3. 价格加速度
+        if 'feature_momentum_13' in df.columns and 'feature_momentum_5' in df.columns:
+            df['feature_acceleration_5_13'] = df['feature_momentum_13'] - df['feature_momentum_5']
+        if 'feature_momentum_34' in df.columns and 'feature_momentum_13' in df.columns:
+            df['feature_acceleration_13_34'] = df['feature_momentum_34'] - df['feature_momentum_13']
+
+        # 4. 价格效率
+        if 'feature_momentum_21' in df.columns:
+            df['feature_price_efficiency_21'] = abs(df['feature_momentum_21']) / (df['close'].rolling(21).std() + 1e-9)
+
+        # ============ 成交量特征 ============
+        # 5. 成交量Z-score
+        df['feature_volume_zscore_30'] = (df['volume'] - df['volume'].rolling(30).mean()) / (df['volume'].rolling(30).std() + 1e-9)
+        df['feature_volume_zscore_89'] = (df['volume'] - df['volume'].rolling(89).mean()) / (df['volume'].rolling(89).std() + 1e-9)
+
+        # 6. 成交量变化率
+        df['feature_volume_change_5'] = df['volume'].pct_change(5)
+        df['feature_volume_change_21'] = df['volume'].pct_change(21)
+
+        # 7. 量价关系
+        df['feature_price_volume_corr_21'] = df['close'].rolling(21).corr(df['volume'])
+
+        # ============ 技术指标 ============
+        # 8. 移动平均
+        for period in [8, 21, 55, 144]:
+            if period <= len(df):
+                df[f'feature_sma_{period}'] = df['close'].rolling(period).mean()
+                df[f'feature_ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
+                df[f'feature_price_vs_sma_{period}'] = (df['close'] - df[f'feature_sma_{period}']) / df[f'feature_sma_{period}']
+
+        # 9. RSI（多周期）
+        for period in [6, 14, 28]:
+            df[f'feature_rsi_{period}'] = self._calculate_rsi(df['close'], period)
+
+        # 10. MACD
+        df['feature_ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
+        df['feature_ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
+        df['feature_macd'] = df['feature_ema_12'] - df['feature_ema_26']
+        df['feature_macd_signal'] = df['feature_macd'].ewm(span=9, adjust=False).mean()
+        df['feature_macd_hist'] = df['feature_macd'] - df['feature_macd_signal']
+
+        # 11. 布林带（多周期）
+        for period in [20, 55, 89]:
+            sma = df['close'].rolling(period).mean()
+            std = df['close'].rolling(period).std()
+            df[f'feature_bb_upper_{period}'] = sma + 2 * std
+            df[f'feature_bb_lower_{period}'] = sma - 2 * std
+            df[f'feature_bb_width_{period}'] = (df[f'feature_bb_upper_{period}'] - df[f'feature_bb_lower_{period}']) / sma
+            df[f'feature_bb_position_{period}'] = (df['close'] - df[f'feature_bb_lower_{period}']) / (4 * std + 1e-9)
+
+        # 12. ATR（平均真实波幅）
+        for period in [14, 28]:
+            high_low = df['high'] - df['low']
+            high_close = abs(df['high'] - df['close'].shift())
+            low_close = abs(df['low'] - df['close'].shift())
+            tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+            df[f'feature_atr_{period}'] = tr.rolling(period).mean()
+            df[f'feature_atr_ratio_{period}'] = df[f'feature_atr_{period}'] / df['close']
+
+        # 13. 波动率特征
+        for window in [21, 55, 144]:
+            df[f'feature_volatility_{window}'] = df['close'].pct_change().rolling(window).std() * math.sqrt(365*24*60)
+
+        # 14. 统计特征
+        for window in [21, 55, 144]:
+            df[f'feature_zscore_{window}'] = (df['close'] - df['close'].rolling(window).mean()) / (df['close'].rolling(window).std() + 1e-9)
+            df[f'feature_skew_{window}'] = df['close'].rolling(window).skew()
+            df[f'feature_kurt_{window}'] = df['close'].rolling(window).kurt()
+
+        # 15. 支撑阻力特征
+        for window in long_term_periods:
+            df[f'feature_high_{window}'] = df['high'].rolling(window).max()
+            df[f'feature_low_{window}'] = df['low'].rolling(window).min()
+            df[f'feature_high_distance_{window}'] = (df[f'feature_high_{window}'] - df['close']) / df['close']
+            df[f'feature_low_distance_{window}'] = (df['close'] - df[f'feature_low_{window}']) / df['close']
+
+        # 16. K线形态特征
+        df['feature_body_size'] = abs(df['close'] - df['open'])
+        df['feature_upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['feature_lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
+        df['feature_body_ratio'] = df['feature_body_size'] / (df['high'] - df['low'] + 1e-9)
+        df['feature_upper_shadow_ratio'] = df['feature_upper_shadow'] / (df['high'] - df['low'] + 1e-9)
+        df['feature_lower_shadow_ratio'] = df['feature_lower_shadow'] / (df['high'] - df['low'] + 1e-9)
+
+        # 17. 时间特征
+        if isinstance(df.index, pd.DatetimeIndex):
+            df['feature_hour'] = df.index.hour
+            df['feature_minute'] = df.index.minute
+            df['feature_day_of_week'] = df.index.dayofweek
+            df['feature_hour_sin'] = np.sin(2 * np.pi * df['feature_hour'] / 24)
+            df['feature_hour_cos'] = np.cos(2 * np.pi * df['feature_hour'] / 24)
+            df['feature_day_sin'] = np.sin(2 * np.pi * df['feature_day_of_week'] / 7)
+            df['feature_day_cos'] = np.cos(2 * np.pi * df['feature_day_of_week'] / 7)
+
+        # 18. 组合特征
+        # 趋势+成交量确认
+        if 'feature_momentum_21' in df.columns and 'feature_volume_zscore_30' in df.columns:
+            df['feature_trend_volume_21_30'] = ((df['feature_momentum_21'] > 0) & (df['feature_volume_zscore_30'] > 1)).astype(int)
+
+        # 突破特征
+        if 'feature_high_55' in df.columns and 'feature_low_55' in df.columns:
+            df['feature_near_high_55'] = ((df['feature_high_55'] - df['close']) / df['close'] < 0.005).astype(int)
+            df['feature_near_low_55'] = ((df['close'] - df['feature_low_55']) / df['close'] < 0.005).astype(int)
+
+        # 多时间框架一致性
+        for p1, p2 in [(8, 21), (21, 55), (55, 144)]:
+            if f'feature_sma_{p1}' in df.columns and f'feature_sma_{p2}' in df.columns:
+                df[f'feature_trend_alignment_{p1}_{p2}'] = ((df[f'feature_sma_{p1}'] > df[f'feature_sma_{p2}']).astype(int) * 2 - 1)
+
+        # ============ 高频特征（10分钟专用） ============
+        # 19. 极短期动量特征
+        for period in ultra_short_periods:
+            if period <= len(df):
+                df[f'feature_ultra_momentum_{period}'] = df['close'] / df['close'].shift(period) - 1
+
+        # 20. 价格冲击
+        df['feature_price_impact'] = (df['high'] - df['low']) / df['close'] * 100
+
+        # 21. 高频成交量特征
+        df['feature_volume_zscore_10'] = (df['volume'] - df['volume'].rolling(10).mean()) / (df['volume'].rolling(10).std() + 1e-9)
+        df['feature_volume_zscore_60'] = (df['volume'] - df['volume'].rolling(60).mean()) / (df['volume'].rolling(60).std() + 1e-9)
+        df['feature_volume_change_3'] = df['volume'].pct_change(3)
+        df['feature_volume_change_10'] = df['volume'].pct_change(10)
+
+        # 22. 高频量价关系
+        df['feature_price_volume_corr_10'] = df['close'].rolling(10).corr(df['volume'])
+        df['feature_price_volume_corr_30'] = df['close'].rolling(30).corr(df['volume'])
+
+        # 23. 高频移动平均
+        for period in [3, 5, 10, 20, 30]:
+            if period <= len(df):
+                if f'feature_sma_{period}' not in df.columns:
+                    df[f'feature_sma_{period}'] = df['close'].rolling(period).mean()
+                if f'feature_ema_{period}' not in df.columns:
+                    df[f'feature_ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
+                if f'feature_price_vs_sma_{period}' not in df.columns:
+                    df[f'feature_price_vs_sma_{period}'] = (df['close'] - df[f'feature_sma_{period}']) / df[f'feature_sma_{period}']
+
+        # 24. 高频RSI
+        for period in [3, 6]:
+            if f'feature_rsi_{period}' not in df.columns:
+                df[f'feature_rsi_{period}'] = self._calculate_rsi(df['close'], period)
+
+        # 25. 快速MACD
+        df['feature_ema_6'] = df['close'].ewm(span=6, adjust=False).mean()
+        df['feature_ema_13'] = df['close'].ewm(span=13, adjust=False).mean()
+        df['feature_fast_macd'] = df['feature_ema_6'] - df['feature_ema_13']
+        df['feature_fast_macd_signal'] = df['feature_fast_macd'].ewm(span=5, adjust=False).mean()
+        df['feature_fast_macd_hist'] = df['feature_fast_macd'] - df['feature_fast_macd_signal']
+
+        # 26. 高频布林带
+        for period in [10, 20, 30]:
+            if f'feature_bb_upper_{period}' not in df.columns:
+                sma = df['close'].rolling(period).mean()
+                std = df['close'].rolling(period).std()
+                df[f'feature_bb_upper_{period}'] = sma + 2 * std
+                df[f'feature_bb_lower_{period}'] = sma - 2 * std
+                df[f'feature_bb_width_{period}'] = (df[f'feature_bb_upper_{period}'] - df[f'feature_bb_lower_{period}']) / sma
+                df[f'feature_bb_position_{period}'] = (df['close'] - df[f'feature_bb_lower_{period}']) / (4 * std + 1e-9)
+
+        # 27. 高频ATR
+        for period in [5, 14]:
+            if f'feature_atr_{period}' not in df.columns:
+                high_low = df['high'] - df['low']
+                high_close = abs(df['high'] - df['close'].shift())
+                low_close = abs(df['low'] - df['close'].shift())
+                tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+                df[f'feature_atr_{period}'] = tr.rolling(period).mean()
+                df[f'feature_atr_ratio_{period}'] = df[f'feature_atr_{period}'] / df['close']
+
+        # 28. 高频波动率
+        for window in [5, 10, 20]:
+            if f'feature_volatility_{window}' not in df.columns:
+                df[f'feature_volatility_{window}'] = df['close'].pct_change().rolling(window).std() * math.sqrt(365*24*60)
+
+        # 29. 高频统计特征
+        for window in [10, 20, 30]:
+            if f'feature_zscore_{window}' not in df.columns:
+                df[f'feature_zscore_{window}'] = (df['close'] - df['close'].rolling(window).mean()) / (df['close'].rolling(window).std() + 1e-9)
+            if f'feature_skew_{window}' not in df.columns:
+                df[f'feature_skew_{window}'] = df['close'].rolling(window).skew()
+
+        # 30. 高频支撑阻力
+        for window in [30, 60]:
+            df[f'feature_high_{window}'] = df['high'].rolling(window).max()
+            df[f'feature_low_{window}'] = df['low'].rolling(window).min()
+            df[f'feature_high_distance_{window}'] = (df[f'feature_high_{window}'] - df['close']) / df['close']
+            df[f'feature_low_distance_{window}'] = (df['close'] - df[f'feature_low_{window}']) / df['close']
+
+        # 31. 反转模式检测
+        df['feature_hammer_pattern'] = ((df['feature_lower_shadow_ratio'] > 0.6) & (df['feature_body_ratio'] < 0.3)).astype(int)
+        df['feature_shooting_star'] = ((df['feature_upper_shadow_ratio'] > 0.6) & (df['feature_body_ratio'] < 0.3)).astype(int)
+
+        # 32. 高频组合特征
+        if 'feature_momentum_5' in df.columns and 'feature_volume_zscore_10' in df.columns:
+            df['feature_trend_volume_5_10'] = ((df['feature_momentum_5'] > 0) & (df['feature_volume_zscore_10'] > 1)).astype(int)
+
+        if 'feature_high_30' in df.columns and 'feature_low_30' in df.columns:
+            df['feature_near_high_30'] = ((df['feature_high_30'] - df['close']) / df['close'] < 0.003).astype(int)
+            df['feature_near_low_30'] = ((df['close'] - df['feature_low_30']) / df['close'] < 0.003).astype(int)
+
+        # 多时间框架一致性（高频）
+        for p1, p2 in [(3, 10), (5, 20), (10, 30)]:
+            if f'feature_sma_{p1}' in df.columns and f'feature_sma_{p2}' in df.columns:
+                df[f'feature_trend_alignment_{p1}_{p2}'] = ((df[f'feature_sma_{p1}'] > df[f'feature_sma_{p2}']).astype(int) * 2 - 1)
+
+        # 33. 价格变化趋势
+        df['feature_price_trend_3'] = df['close'].diff(3) / df['close'].shift(3)
+        df['feature_price_trend_5'] = df['close'].diff(5) / df['close'].shift(5)
+
+        # 34. 成交量趋势
+        df['feature_volume_trend_3'] = df['volume'].diff(3) / df['volume'].shift(3)
+        df['feature_volume_trend_5'] = df['volume'].diff(5) / df['volume'].shift(5)
+
+        # 35. 相对强弱
+        if 'feature_momentum_5' in df.columns and 'feature_momentum_10' in df.columns:
+            df['feature_relative_strength_5_10'] = df['feature_momentum_5'] - df['feature_momentum_10']
+
+        # ============ 清理数据 ============
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.ffill().bfill()
+
+        # 更新特征列并返回处理后的df
+        self.feature_columns = [col for col in df.columns if col.startswith('feature_')]
+        print(f"Generated {len(self.feature_columns)} potato features.")
+        self.df = df
+        return self.df
+    
     def _calculate_rsi(self, series, period=14):
         delta = series.diff(1)
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -592,75 +847,3 @@ class DataProcessor:
             self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
         self.df = self.df.dropna() # 再次dropna以防有转换错误
         return self.df
-
-    def split_data_for_lara(self, processed_df, train_start_date, train_end_date,
-                            valid_start_date, valid_end_date,
-                            test_start_date, test_end_date):
-        """
-        将数据划分为训练集、验证集、测试集，并构造成LARA.fit所需的格式。
-        日期应该是字符串 'YYYY-MM-DD' 或 'YYYY-MM-DD HH:MM:SS'
-        """
-        datasets_dict = {}
-        for periode_name, start_date, end_date in [
-            ("train", train_start_date, train_end_date),
-            ("valid", valid_start_date, valid_end_date),
-            ("test", test_start_date, test_end_date)
-        ]:
-            # 获取索引的时区
-            tz = processed_df.index.tz
-
-            # 转换 start_date 和 end_date 为带时区的时间
-            start_dt = pd.to_datetime(start_date)
-            end_dt = pd.to_datetime(end_date)
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.tz_localize(tz)
-            else:
-                start_dt = start_dt.tz_convert(tz)
-            if end_dt.tzinfo is None:
-                end_dt = end_dt.tz_localize(tz)
-            else:
-                end_dt = end_dt.tz_convert(tz)
-            subset_df = processed_df[(processed_df.index >= pd.to_datetime(start_dt)) &
-                                     (processed_df.index <= pd.to_datetime(end_dt))].copy()
-
-            if subset_df.empty:
-                print(f"Warning: {periode_name} dataset is empty for the given date range.")
-                features_df = pd.DataFrame(columns=self.feature_columns)
-                labels_df = pd.DataFrame(columns=[self.label_column_name, 'instrument', 'datetime'])
-            else:
-                # 特征 DataFrame
-                features_df = subset_df[self.feature_columns].copy()
-                features_df['instrument'] = self.instrument_name
-                features_df['datetime'] = subset_df.index
-                features_df = features_df.set_index(['datetime', 'instrument'])
-
-                # 标签 DataFrame
-                labels_df = subset_df[[self.label_column_name]].copy()
-                labels_df['instrument'] = self.instrument_name
-                labels_df['datetime'] = subset_df.index
-                labels_df = labels_df.set_index(['datetime', 'instrument'])
-
-            datasets_dict[periode_name] = {"feature": features_df, "label": labels_df}
-            print(f"{periode_name} set: features shape {features_df.shape}, labels shape {labels_df.shape}")
-
-        # LARA.fit 需要一个 prepare 方法返回 [train_dict, valid_dict, test_dict]
-        class MockDatasetH:
-            def __init__(self, train_d, valid_d, test_d):
-                self.train_dict = train_d
-                self.valid_dict = valid_d
-                self.test_dict = test_d
-
-            def prepare(self, segments, col_set, data_key):
-                # segments is ["train", "valid", "test"]
-                # col_set is ["feature", "label"]
-                # data_key is DataHandlerLP.DK_L (not directly used here, as we pre-construct)
-                prepared_data = []
-                if "train" in segments:
-                    prepared_data.append(self.train_dict)
-                if "valid" in segments:
-                    prepared_data.append(self.valid_dict)
-                if "test" in segments:
-                    prepared_data.append(self.test_dict)
-                return prepared_data
-
-        return MockDatasetH(datasets_dict["train"], datasets_dict["valid"], datasets_dict["test"])
